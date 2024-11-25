@@ -19,7 +19,234 @@ try {
 
   var hasInit = false;
   var hasInitMenu = false;
-  var isModal = false;
+  var xrayIsOpen = false;
+  var previousMessageContainerId = null;
+  // window.eysources = 'thumbnails'; // sidebar | modal | thumbnails
+  window.selectedFiles = []; // {file: File, status:  "pending" | "uploading" | "uploaded", uploadedFileURL: string }[]
+
+  var uploadButton = document.getElementById('uploadButton');
+  var fileUploader = document.getElementById('fileUploader');
+  var fileContainer = document.getElementById('fileContainer');
+  var eyInputContainer = document.getElementById('ey_input_container');
+  var fileErrorMessage = document.getElementById('fileErrorMessage');
+
+  // FILE UPLOADER CODE
+  uploadButton.addEventListener('click', function () {
+    fileUploader.click();
+  });
+
+  fileUploader.addEventListener('change', function (event) {
+    var files = event.target.files;
+    handleFiles(files);
+  });
+
+  eyInputContainer.addEventListener('dragover', function (event) {
+    if (window.eysources === 'thumbnails') return;
+
+    event.preventDefault();
+    eyInputContainer.classList.add('dragover');
+  });
+
+  eyInputContainer.addEventListener('dragleave', function (event) {
+    if (window.eysources === 'thumbnails') return;
+
+    eyInputContainer.classList.remove('dragover');
+  });
+
+  eyInputContainer.addEventListener('drop', function (event) {
+    if (window.eysources === 'thumbnails') return;
+
+    event.preventDefault();
+    eyInputContainer.classList.remove('dragover');
+    var files = event.dataTransfer.files;
+    handleFiles(files);
+  });
+
+  function generateRandom10DigitNumber() {
+    return Math.floor(1000000000 + Math.random() * 9000000000).toString();
+  }
+
+  function fetchImage(file) {
+    var fileType = file.name.split('.').pop().toLowerCase();
+    var mimeType = file.type;
+    var randomFileName = generateRandom10DigitNumber();
+
+    return fetch('https://api.eyelevel.ai/upload/file?name=' + randomFileName + '&type=' + fileType)
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (data) {
+        var URL = data.URL;
+        return fetch(decodeURI(URL), {
+          method: 'PUT',
+          body: file,
+          headers: new Headers({
+            'Content-Type': mimeType,
+          }),
+        });
+      })
+      .then(function (uploadResponse) {
+        if (uploadResponse.status !== 200) {
+          throw new Error('Upload failed');
+        }
+        return 'https://upload.eyelevel.ai/file/' + randomFileName + '.' + fileType;
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function handleFiles(files) {
+    var allowedExtensions = ['png', 'jpeg', 'jpg', 'webp'];
+    var maxFileSize = 20 * 1024 * 1024; // 20MB in bytes
+    var maxFilesCount = 10;
+
+    var filesArray = Array.from(files);
+
+    filesArray = filesArray.filter(function (newFile) {
+      return !window.selectedFiles.some(function (existingFileItem) {
+        var existingFile = existingFileItem.file;
+        return (
+          existingFile.name === newFile.name &&
+          existingFile.size === newFile.size &&
+          existingFile.lastModified === newFile.lastModified
+        );
+      });
+    });
+
+    if (window.selectedFiles.length + filesArray.length > maxFilesCount) {
+      showErrorMessage('max 10 files');
+      return;
+    }
+
+    for (var i = 0; i < filesArray.length; i++) {
+      var file = filesArray[i];
+      var fileExtension = file.name.split('.').pop().toLowerCase();
+
+      if (!allowedExtensions.includes(fileExtension)) {
+        showErrorMessage('support only: .png, .jpeg, .jpg, .webp');
+        continue;
+      }
+
+      if (file.size > maxFileSize) {
+        showErrorMessage('file size 20MB max per image');
+        continue;
+      }
+
+      window.selectedFiles.push({ file: file, status: 'pending' });
+    }
+
+    if (window.selectedFiles.length > 0) {
+      eyInputContainer.classList.remove('ey_input');
+      eyInputContainer.classList.add('ey_input_with_files');
+    } else {
+      eyInputContainer.classList.remove('ey_input_with_files');
+      eyInputContainer.classList.add('ey_input');
+    }
+
+    renderFiles();
+    uploadFiles();
+  }
+
+  function uploadFiles() {
+    window.selectedFiles.forEach(fileItem => {
+      if (fileItem.status === 'pending') {
+        uploadFile(fileItem);
+      }
+    });
+  }
+
+  function uploadFile(fileItem) {
+    fileItem.status = 'uploading';
+    renderFiles();
+
+    fetchImage(fileItem.file)
+      .then(function (uploadedFileURL) {
+        if (uploadedFileURL) {
+          fileItem.status = 'uploaded';
+          fileItem.uploadedURL = uploadedFileURL;
+        } else {
+          fileItem.status = 'error';
+        }
+        renderFiles();
+      })
+      .catch(function () {
+        fileItem.status = 'error';
+        renderFiles();
+      });
+  }
+
+  function renderFiles() {
+    if (!fileErrorMessage.innerText && window.selectedFiles && !window.selectedFiles.length) {
+      eyInputContainer.classList.remove('ey_input_with_files');
+      eyInputContainer.classList.add('ey_input');
+    }
+
+    fileContainer.innerHTML = '';
+    window.selectedFiles.forEach((fileItem, index) => {
+      const file = fileItem.file;
+
+      const fileItemDiv = document.createElement('div');
+      fileItemDiv.classList.add('file-item');
+
+      const fileIcon = document.createElement('div');
+      fileIcon.classList.add('file-icon');
+
+      if (fileItem.status === 'uploading') {
+        fileIcon.classList.add('loading');
+      } else if (fileItem.status === 'uploaded') {
+        fileIcon.innerHTML = '📄';
+      } else if (fileItem.status === 'error') {
+        fileIcon.innerHTML = '❌';
+      } else {
+        fileIcon.innerHTML = '📄';
+      }
+
+      const fileDetails = document.createElement('div');
+      fileDetails.classList.add('file-details');
+      fileDetails.innerHTML = `<strong>${file.name}</strong><br><span>${file.name
+        .split('.')
+        .pop()}</span>`;
+
+      const removeBtn = document.createElement('button');
+      removeBtn.classList.add('remove-file-btn');
+      removeBtn.innerHTML = '✕';
+      removeBtn.onclick = () => removeFile(index);
+
+      fileItemDiv.appendChild(fileIcon);
+      fileItemDiv.appendChild(fileDetails);
+      fileItemDiv.appendChild(removeBtn);
+
+      fileContainer.appendChild(fileItemDiv);
+    });
+  }
+
+  function removeFile(index) {
+    window.selectedFiles.splice(index, 1);
+    renderFiles();
+  }
+
+  function showErrorMessage(message) {
+    setTimeout(function () {
+      eyInputContainer.classList.remove('ey_input');
+      eyInputContainer.classList.add('ey_input_with_files');
+    }, 0);
+
+    if (fileErrorMessage) {
+      fileErrorMessage.innerText = message;
+      fileErrorMessage.style.display = 'block';
+
+      setTimeout(function () {
+        if (window.selectedFiles && !window.selectedFiles.length) {
+          eyInputContainer.classList.remove('ey_input_with_files');
+          eyInputContainer.classList.add('ey_input');
+        }
+
+        fileErrorMessage.innerText = '';
+        fileErrorMessage.style.display = 'none';
+      }, 3000);
+    }
+  }
 
   function initModal() {
     var modalContainer = document.createElement('div');
@@ -334,18 +561,817 @@ try {
     messageContainer.append(sideBar);
   }
 
-  function handleClickSourceUrl(url, text, index, messageContainerId) {
-    if (window.eysources === "modal") {
-      return openSourceLinkInModal(url, text, index);
+  function removeActiveThumbnail() {
+    const thumbnails = document.querySelectorAll('.thumbnail-item.active');
+    const nonPdfThumbnails = document.querySelectorAll('.thumbnail-non-pdf-item.active');
+    if (thumbnails && thumbnails.length > 0) {
+      thumbnails.forEach(thumb => {
+        thumb.classList.remove('active');
+      });
+    }
+
+    if (nonPdfThumbnails && nonPdfThumbnails.length > 0) {
+      nonPdfThumbnails.forEach(thumb => {
+        thumb.classList.remove('active');
+      });
+    }
+  }
+
+  function thumbnailsItemComponent(link) {
+    if (link) {
+      const img = document.createElement('img');
+      img.src = link;
+      img.width = 80;
+      img.height = 100;
+      img.className = 'thumbnail-item';
+      return img;
+    } else {
+      const fileIcon = document.createElement('div');
+      fileIcon.innerHTML = '<span class="non-pdf-fileIcon">📄</span>';
+      fileIcon.className = 'thumbnail-non-pdf-item';
+      return fileIcon;
+    }
+  }
+
+  function xrayLinkButton(documentId, isNonXrayDocument) {
+    if (isNonXrayDocument) {
+      var span = document.createElement('span');
+      return span;
+    }
+
+    var url = 'https://dashboard.groundx.ai/xray/' + documentId;
+
+    switch (window.eyEnv) {
+      case 'dev':
+      case 'local':
+      case 'local-chat-dev':
+      case 'local-css-dev':
+      case 'local-dev':
+        url = 'https://devdashboard.groundx.ai/xray/' + documentId;
+        break;
+    }
+
+    // Create the text link
+    var button = document.createElement('button');
+    button.classList.add('xray-header-button');
+    button.textContent = 'X-Ray';
+    button.onclick = function () {
+      window.open(url, '_blank');
     };
 
-    if (window.eysources === "sidebar") {
-      return openSourceLinkInSideBar(url, text, index, messageContainerId);
+    return button;
+  }
+
+
+  function xraySourceLinkButton(url, pageNumber) {
+    var button = document.createElement('button');
+    button.classList.add('xray-header-button');
+    button.textContent = 'Source';
+    button.onclick = function () {
+      var decodedUrl = decodeURIComponent(url);
+      decodedUrl = decodedUrl.replace(/\+/g, encodeURIComponent('+'));
+      decodedUrl += '#page=' + pageNumber;
+      var encodedUrl = encodeURI(decodedUrl);
+      window.open(encodedUrl, '_blank');
     };
+
+    return button;
+  }
+
+ // Movable modal window
+ function openXrayModal(searchResultsItem) {
+  var modalOverlay = document.createElement('div');
+  modalOverlay.className = 'modal-overlay';
+
+  var modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.style.position = 'absolute'; // Make modal position absolute
+
+  modal.style.left = '50%';
+  modal.style.top = '50%';
+  modal.style.transform = 'translate(-50%, -50%)';
+
+  var modalContent = document.createElement('div');
+  modalContent.className = 'modal-content';
+
+  var modalHeader = document.createElement('div');
+  modalHeader.className = 'modal-header';
+
+  var modalTitle = document.createElement('h3');
+  modalTitle.textContent = 'Semantic Object Detail';
+
+  var closeIcon = document.createElement('span');
+  closeIcon.className = 'close-icon';
+  closeIcon.innerHTML = '&times;';
+
+  modalHeader.appendChild(modalTitle);
+  modalHeader.appendChild(closeIcon);
+
+  var accordionContainer = document.createElement('div');
+  accordionContainer.className = 'accordion-container';
+
+  var suggestedTextAccordion = createAccordion(
+    'Suggested Text',
+    searchResultsItem.suggestedText,
+  );
+  var extractedTextAccordion = createAccordion('Extracted Text', searchResultsItem.text);
+  var fileKeywordsAccordion = createAccordion('File Keywords', searchResultsItem.fileKeywords);
+
+  accordionContainer.appendChild(suggestedTextAccordion);
+  accordionContainer.appendChild(extractedTextAccordion);
+  accordionContainer.appendChild(fileKeywordsAccordion);
+
+  modalContent.appendChild(modalHeader);
+  modalContent.appendChild(accordionContainer);
+
+  modal.appendChild(modalContent);
+  modalOverlay.appendChild(modal);
+  document.body.appendChild(modalOverlay);
+
+  closeIcon.addEventListener('click', function () {
+    document.body.removeChild(modalOverlay);
+  });
+
+  modalOverlay.addEventListener('click', function (e) {
+    if (e.target === modalOverlay) {
+      document.body.removeChild(modalOverlay);
+    }
+  });
+
+  // Make modal draggable by the header
+  let isDragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  modalHeader.addEventListener('mousedown', function (e) {
+    isDragging = true;
+    // Calculate offset between mouse position and modal's top-left corner
+    const rect = modal.getBoundingClientRect();
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+
+    // Add event listeners for mousemove and mouseup
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    // Prevent default behavior to avoid text selection
+    e.preventDefault();
+  });
+
+  function onMouseMove(e) {
+    if (isDragging) {
+      // Update modal position
+      modal.style.left = e.clientX - offsetX + 'px';
+      modal.style.top = e.clientY - offsetY + 'px';
+      modal.style.transform = ''; // Remove transform to prevent conflicts
+    }
+  }
+
+  function onMouseUp() {
+    isDragging = false;
+    // Remove event listeners
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+   
+  function createAccordion(title, content) {
+    var accordionItem = document.createElement('div');
+    accordionItem.className = 'accordion-item';
+
+    var accordionHeader = document.createElement('div');
+    accordionHeader.className = 'accordion-header';
+
+    var headerTitle = document.createElement('span');
+    headerTitle.textContent = title;
+
+    var arrowIcon = document.createElement('span');
+    arrowIcon.className = 'arrow-icon';
+    arrowIcon.innerHTML = '&#9650;';
+
+    accordionHeader.appendChild(headerTitle);
+    accordionHeader.appendChild(arrowIcon);
+
+    var accordionBody = document.createElement('div');
+    accordionBody.className = 'accordion-body';
+
+    var accordionContent = document.createElement('div');
+    accordionContent.className = 'accordion-content';
+    var contentText = content.replace(/<br \/>/g, '\n');
+    accordionContent.innerHTML = mdConverter.makeHtml(contentText);
+
+    accordionBody.appendChild(accordionContent);
+
+    accordionItem.appendChild(accordionHeader);
+    accordionItem.appendChild(accordionBody);
+
+    accordionBody.style.maxHeight = '0';
+
+    // Toggle body display on header click
+    accordionHeader.addEventListener('click', function () {
+      var isActive = accordionItem.classList.toggle('active');
+
+      if (isActive) {
+        accordionBody.style.maxHeight = accordionBody.scrollHeight + 'px';
+        arrowIcon.style.transform = 'rotate(180deg)';
+      } else {
+        accordionBody.style.maxHeight = '0';
+        arrowIcon.style.transform = 'rotate(0deg)';
+      }
+    });
+
+    return accordionItem;
+  }
+
+  function hexToRgba(hex, alpha) {
+    hex = hex.replace('#', '');
+
+    if (hex.length === 3) {
+      hex = hex
+        .split('')
+        .map(function (h) {
+          return h + h;
+        })
+        .join('');
+    }
+
+    var bigint = parseInt(hex, 16);
+    var r = (bigint >> 16) & 255;
+    var g = (bigint >> 8) & 255;
+    var b = bigint & 255;
+
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+    
+  function createXrayImageWithBoxes(imgData) {
+    var imageContainer = document.createElement('div');
+    imageContainer.className = 'image-container';
+
+    var loadingText = document.createElement('div');
+    loadingText.className = 'loading-text';
+    loadingText.textContent = 'Loading...';
+    imageContainer.appendChild(loadingText);
+
+    var img = document.createElement('img');
+    img.src = imgData.pageImagesUrl;
+    img.crossOrigin = 'Anonymous';
+
+    imageContainer.appendChild(img);
+
+    img.onload = function () {
+      imageContainer.removeChild(loadingText);
+      imageContainer.style.border = '1px solid #ccc';
+
+      var imgWidth = img.naturalWidth;
+      var imgHeight = img.naturalHeight;
+      var padding = 5;
+
+      imgData.boundingBoxes.forEach(function (box) {
+        var topLeftX = Math.max(0, box.topLeftX - padding);
+        var topLeftY = Math.max(0, box.topLeftY - padding);
+        var bottomRightX = Math.min(imgWidth, box.bottomRightX + padding);
+        var bottomRightY = Math.min(imgHeight, box.bottomRightY + padding);
+
+        var xPercent = (topLeftX / imgWidth) * 100;
+        var yPercent = (topLeftY / imgHeight) * 100;
+        var widthPercent = ((bottomRightX - topLeftX) / imgWidth) * 100;
+        var heightPercent = ((bottomRightY - topLeftY) / imgHeight) * 100;
+
+        var div = document.createElement('div');
+        div.className = 'bounding-box';
+        div.style.left = xPercent + '%';
+        div.style.top = yPercent + '%';
+        div.style.width = widthPercent + '%';
+        div.style.height = heightPercent + '%';
+        div.style.backgroundColor = hexToRgba(box.color, 0.3);
+        div.style.borderColor = box.color;
+
+        var item = imgData.items[box.itemIndex];
+
+        div.addEventListener('click', function (e) {
+          e.stopPropagation();
+          openXrayModal(item);
+        });
+
+        imageContainer.appendChild(div);
+      });
+    };
+
+    return imageContainer;
+  }
   
-    window.open(url, '_blank');
+  function createXrayContentHeader(url, documentId, fileName, pageNumber, isNonXrayDocument) {
+    var xrayContentHeaderDiv = document.createElement('div');
+    xrayContentHeaderDiv.id = 'xray-content-header';
+    xrayContentHeaderDiv.className = 'xray-content-header';
 
-  };
+    // Left Side
+    var leftSide = document.createElement('div');
+    leftSide.className = 'left-content';
+
+    var sourceLink = xraySourceLinkButton(url, pageNumber);
+    var fullXrayLink = xrayLinkButton(documentId, isNonXrayDocument);
+
+    leftSide.appendChild(sourceLink);
+    leftSide.appendChild(fullXrayLink);
+
+    // Middle (Document Name)
+    var middle = document.createElement('div');
+    middle.className = 'xray-document-name';
+    middle.innerHTML = 'File: ' + fileName;
+
+    // Right Side (Close Icon)
+    var rightSide = document.createElement('div');
+    rightSide.className = 'right-content';
+
+    var closeIcon = document.createElement('span');
+    closeIcon.innerHTML = '&times;';
+    closeIcon.className = 'close-icon';
+    closeIcon.id = 'xray-close-icon';
+
+    closeIcon.onclick = function () {
+      const xrayContent = document.getElementById('xray-content');
+      const xrayDiv = document.getElementById('xray');
+      if (xrayContent) {
+        xrayContent.remove();
+      }
+      if (xrayDiv) {
+        const centerDiv = emptyXraySideBar();
+        xrayDiv.appendChild(centerDiv);
+      }
+      removeActiveThumbnail();
+      removeSourceHeaderContent();
+    };
+
+    rightSide.appendChild(closeIcon);
+
+    // Assemble Header
+    xrayContentHeaderDiv.appendChild(leftSide);
+    xrayContentHeaderDiv.appendChild(middle);
+    xrayContentHeaderDiv.appendChild(rightSide);
+
+    return xrayContentHeaderDiv;
+  }
+  
+  function removeBoxShadowForXrayTheme() {
+    if (window.eysources !== 'thumbnails') return;
+    var messageResponse = document.getElementsByClassName('server-response');
+    for (var i = 0; i < messageResponse.length; i++) {
+      messageResponse[i].style.boxShadow = 'none';
+    }
+  }
+  
+  window.addEventListener('resize', () => {
+    if (window.eysources !== 'thumbnails') return;
+
+    var eyChatDiv = document.getElementById('eyChat');
+    var resultWrapperDiv = document.getElementById('resultWrapper');
+    var eyInputContainerDiv = document.getElementById('ey_input_container');
+    var xrayDiv = document.getElementById('xray');
+
+    if (eyChatDiv) {
+      var eyChatWidth = eyChatDiv.offsetWidth;
+
+      if (eyChatWidth < 900) {
+        removeActiveThumbnail();
+        removeSourceHeaderContent();
+        eyChatDiv.style.width = '100%';
+
+        if (resultWrapperDiv) {
+          resultWrapperDiv.style.width = '100%';
+        }
+
+        if (eyInputContainerDiv) {
+          eyInputContainerDiv.style.width = '100%';
+        }
+
+        if (xrayDiv) {
+          xrayDiv.className = 'xray_document_modal';
+
+          if (xrayIsOpen) {
+            xrayDiv.style.display = 'block';
+            xrayDiv.style.position = 'fixed';
+            xrayDiv.style.top = '0';
+            xrayDiv.style.left = '0';
+            xrayDiv.style.width = '100%';
+            xrayDiv.style.height = '100%';
+            xrayDiv.style.zIndex = '10';
+            xrayDiv.style.backgroundColor = '#fff';
+
+            var closeButton = document.getElementById('xray-close-icon');
+            if (closeButton) {
+              closeButton.onclick = function () {
+                xrayDiv.remove();
+                xrayIsOpen = false;
+              };
+            }
+          } else {
+            xrayDiv.remove();
+          }
+        }
+      } else {
+        // Adjust styles for large screens
+        eyChatDiv.style.width = '100%';
+
+        if (resultWrapperDiv) {
+          resultWrapperDiv.style.width = '50%';
+        }
+
+        if (eyInputContainerDiv) {
+          eyInputContainerDiv.style.width = '50%';
+        }
+
+        if (xrayDiv) {
+          if (xrayDiv.classList.contains('xray_document_modal')) {
+            xrayDiv.className = 'xray_document';
+            xrayDiv.style = '';
+
+            var closeButton = document.getElementById('xray-close-icon');
+            closeButton.onclick = function () {
+              var xrayContent = document.getElementById('xray-content');
+              xrayContent.remove();
+            };
+
+            const centerDiv = emptyXraySideBar();
+            xrayDiv.appendChild(centerDiv);
+            removeActiveThumbnail();
+            removeSourceHeaderContent();
+
+            if (!eyChatDiv.contains(xrayDiv)) {
+              eyChatDiv.appendChild(xrayDiv);
+            }
+
+            xrayIsOpen = false;
+          }
+        } else {
+          xrayDiv = document.createElement('div');
+          xrayDiv.className = 'xray_document';
+          xrayDiv.id = 'xray';
+
+          var centerDiv = emptyXraySideBar();
+          xrayDiv.appendChild(centerDiv);
+          eyChatDiv.appendChild(xrayDiv);
+        }
+      }
+    }
+  });
+
+  function emptyXraySideBar() {
+    var centerDiv = document.createElement('div');
+    centerDiv.id = 'empty-source-sidebar';
+    Object.assign(centerDiv.style, {
+      height: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    });
+
+    var sourcesText = document.createElement('p');
+    sourcesText.textContent = 'Sources';
+    sourcesText.style.margin = 0;
+
+    centerDiv.appendChild(sourcesText);
+
+    return centerDiv;
+  }
+
+  function getPageNumberFromPageImagesUrl(pageImagesUrl) {
+    if (pageImagesUrl) {
+      var parts = pageImagesUrl.split('/');
+      var lastPart = parts[parts.length - 1];
+      var pageNumberStr = lastPart.split('.')[0];
+      return parseInt(pageNumberStr);
+    } else {
+      return null;
+    }
+  }
+
+  function loadFilesPreviewInIframe(fileUrl) {
+    var container = document.createElement('div');
+    container.style.position = 'relative';
+
+    // Create the loading message
+    var loadingText = document.createElement('div');
+    loadingText.textContent = 'Loading...';
+    loadingText.style.position = 'absolute';
+    loadingText.style.top = '25px';
+    loadingText.style.left = '50%';
+    loadingText.style.transform = 'translate(-50%, -50%)';
+    loadingText.style.fontSize = '16px';
+    loadingText.style.color = '#555';
+    container.appendChild(loadingText);
+
+    var iframe = document.createElement('iframe');
+    iframe.width = '100%';
+    iframe.height = '650px';
+    iframe.style.border = '0';
+    iframe.style.marginTop = '12px';
+
+    var decodedUrl = decodeURIComponent(fileUrl);
+    decodedUrl = decodedUrl.replace(/\+/g, encodeURIComponent('+'));
+    var encodedUrl = encodeURI(decodedUrl);
+    iframe.src = 'https://docs.google.com/gview?embedded=true&url=' + encodedUrl;
+
+    iframe.onload = function () {
+      // Remove the loading message when the iframe has loaded
+      container.removeChild(loadingText);
+    };
+
+    iframe.onerror = function (e) {
+      console.error(e);
+      console.error('Failed to load the file in the iframe.');
+      // Optionally display an error message to the user
+      loadingText.textContent = 'Failed to load the document.';
+    };
+
+    container.appendChild(iframe);
+    return container;
+  }
+ 
+  function openSourceLinkInThumbnailsSideBar(searchResultsItem) {
+    var isNonXrayDocument = !searchResultsItem.pageImagesUrl;
+    var eyChatDiv = document.getElementById('eyChat');
+    if (eyChatDiv) {
+      var xrayDiv = document.getElementById('xray');
+
+      if (!xrayDiv) {
+        xrayDiv = document.createElement('div');
+        xrayDiv.className = 'xray_document';
+        xrayDiv.id = 'xray';
+
+        eyChatDiv.appendChild(xrayDiv);
+      } else {
+        xrayDiv.innerHTML = '';
+      }
+
+      var xrayContentDiv = document.createElement('div');
+      xrayContentDiv.className = 'xray_document_content';
+      xrayContentDiv.id = 'xray-content';
+      xrayContentDiv.style.padding = '20px';
+      xrayContentDiv.style.marginBottom = '50px';
+
+      var firstItem = searchResultsItem.items[0];
+      var pageNumber = getPageNumberFromPageImagesUrl(searchResultsItem.pageImagesUrl);
+      var xrayContentHeaderDiv = createXrayContentHeader(
+        firstItem.url,
+        firstItem.documentId,
+        firstItem.fileName,
+        pageNumber,
+        isNonXrayDocument,
+      );
+
+      xrayContentDiv.appendChild(xrayContentHeaderDiv);
+
+      var allBoundingBoxes = [];
+      var colors = ['#63EF0F', '#613AD1', '#EAEE30', '#FF8A40'];
+
+      searchResultsItem.items.forEach(function (item, index) {
+        var color = colors[index % colors.length];
+        if (item.boundingBoxes) {
+          item.boundingBoxes.forEach(function (box) {
+            box.color = color;
+            box.itemIndex = index;
+            allBoundingBoxes.push(box);
+          });
+        }
+      });
+
+      var imgData = {
+        pageImagesUrl: searchResultsItem.pageImagesUrl,
+        boundingBoxes: allBoundingBoxes,
+        items: searchResultsItem.items,
+      };
+
+      var imgContainer;
+
+      if (imgData.pageImagesUrl) {
+        imgContainer = createXrayImageWithBoxes(imgData);
+      } else {
+        var url = imgData.items[0].url;
+        imgContainer = loadFilesPreviewInIframe(url);
+      }
+
+      xrayContentDiv.appendChild(imgContainer);
+      xrayDiv.appendChild(xrayContentDiv);
+
+      var resultWrapperDiv = document.getElementById('resultWrapper');
+      var eyInputContainerDiv = document.getElementById('ey_input_container');
+
+      var eyChatWidth = eyChatDiv.offsetWidth;
+
+      if (eyChatWidth < 900) {
+        if (resultWrapperDiv) {
+          resultWrapperDiv.style.width = '100%';
+        }
+
+        if (eyInputContainerDiv) {
+          eyInputContainerDiv.style.width = '100%';
+        }
+
+        xrayDiv.className = 'xray_document_modal';
+        xrayDiv.style.display = 'block';
+        xrayDiv.style.position = 'fixed';
+        xrayDiv.style.top = '0';
+        xrayDiv.style.left = '0';
+        xrayDiv.style.width = '100%';
+        xrayDiv.style.height = '100%';
+        xrayDiv.style.zIndex = '10';
+        xrayDiv.style.backgroundColor = '#fff';
+
+        var closeButton = document.getElementById('xray-close-icon');
+        if (closeButton) {
+          closeButton.onclick = function () {
+            xrayDiv.remove();
+            xrayIsOpen = false;
+            removeActiveThumbnail();
+            removeSourceHeaderContent();
+          };
+        }
+
+        xrayIsOpen = true;
+      } else {
+        // Large screen adjustments
+        if (resultWrapperDiv) {
+          resultWrapperDiv.style.width = '50%';
+        }
+
+        if (eyInputContainerDiv) {
+          eyInputContainerDiv.style.width = '50%';
+        }
+
+        xrayDiv.className = 'xray_document';
+        xrayIsOpen = false;
+      }
+    }
+  }
+ 
+  function initEmptyXraySourceBar() {
+    var eyChatDiv = document.getElementById('eyChat');
+    var resultWrapperDiv = document.getElementById('resultWrapper');
+    var result = document.getElementById('result');
+    var eyInputContainerDiv = document.getElementById('ey_input_container');
+    var query = document.getElementById('query');
+    var eySend = document.getElementById('ey-send');
+
+    if (eyChatDiv) {
+      var eyChatWidth = eyChatDiv.offsetWidth;
+
+      if (eyChatWidth < 900) {
+        eyChatDiv.style.width = '100%';
+
+        if (resultWrapperDiv) {
+          resultWrapperDiv.style.width = '100%';
+          resultWrapperDiv.style.background = '#F1F9FB';
+        }
+
+        if (eyInputContainerDiv) {
+          eyInputContainerDiv.style.width = '100%';
+          eyInputContainerDiv.style.backgroundColor = '#F1F9FB';
+          eyInputContainerDiv.style.paddingTop = '5px';
+          eyInputContainerDiv.style.paddingBottom = '5px';
+        }
+
+        if (result) {
+          result.style.border = 'none';
+        }
+
+        if (query) {
+          query.style.borderRadius = '25px';
+          query.style.textIndent = '16px';
+          query.style.marginRight = '35px';
+          query.style.marginLeft = '20px';
+          query.style.border = '1px solid #ddd';
+        }
+
+        if (eySend) {
+          eySend.style.background = '#F1F9FB';
+          eySend.style.marginBottom = '15px';
+          eySend.style.marginRight = '35px';
+        }
+      } else {
+        var xrayDiv = document.getElementById('xray');
+
+        if (!xrayDiv) {
+          xrayDiv = document.createElement('div');
+          xrayDiv.className = 'xray_document';
+          xrayDiv.id = 'xray';
+
+          var centerDiv = emptyXraySideBar();
+          xrayDiv.appendChild(centerDiv);
+          eyChatDiv.appendChild(xrayDiv);
+        } else {
+          xrayDiv.innerHTML = '';
+        }
+
+        if (result) {
+          result.style.border = 'none';
+        }
+
+        if (query) {
+          query.style.borderRadius = '25px';
+          query.style.textIndent = '16px';
+          query.style.marginRight = '35px';
+          query.style.marginLeft = '20px';
+          query.style.border = '1px solid #ddd';
+        }
+
+        if (eySend) {
+          eySend.style.background = '#F1F9FB';
+          eySend.style.marginRight = '35px';
+        }
+
+        if (resultWrapperDiv) {
+          resultWrapperDiv.style.width = '50%';
+          resultWrapperDiv.style.background = '#F1F9FB';
+        }
+
+        if (eyInputContainerDiv) {
+          eyInputContainerDiv.style.width = '50%';
+          eyInputContainerDiv.style.background = '#F1F9FB';
+          eyInputContainerDiv.style.paddingTop = '5px';
+          eyInputContainerDiv.style.paddingBottom = '5px';
+        }
+      }
+
+      removeFileUploader();
+    }
+  }
+ 
+  function removeFileUploader() {
+    var fileUploadContainer = document.getElementById('fileUploadContainer');
+    if (fileUploadContainer) {
+      fileUploadContainer.remove();
+    }
+  }
+ 
+  function removeSourceHeaderContent() {
+    if (previousMessageContainerId) {
+      const previousDiv = document.querySelector(
+        `div.server-response[id^="static-${previousMessageContainerId}"]`,
+      );
+      if (previousDiv) {
+        const sourceHeader = previousDiv.querySelector('h4.source-header');
+        if (sourceHeader) {
+          sourceHeader.innerHTML = 'Sources';
+        }
+      }
+    }
+  }
+  
+  function toggleThumbnailsActive(component, selectedSource, messageContainerId) {
+    if (window.eysources !== 'thumbnails') return;
+
+    if (previousMessageContainerId !== messageContainerId) {
+      removeSourceHeaderContent();
+    }
+
+    const serverResponseDiv = document.querySelector(
+      `div.server-response[id^="static-${messageContainerId}"]`,
+    );
+
+    var file = selectedSource.items[0];
+
+    if (serverResponseDiv) {
+      const sourceHeader = serverResponseDiv.querySelector('h4.source-header');
+      if (sourceHeader) {
+        var fileName;
+        if (file.fileName.length > 25) {
+          fileName = file.fileName.substring(0, 25) + '...';
+        } else {
+          fileName = file.fileName;
+        }
+        var s = document.createElement('span');
+        s.style.color = '#e26f4b';
+        s.innerText = fileName;
+
+        sourceHeader.innerHTML = 'Sources: ';
+        sourceHeader.appendChild(s);
+        previousMessageContainerId = messageContainerId;
+      }
+    }
+
+    var thumbnails = document.querySelectorAll('.thumbnail-item.active');
+    var nonPdfThumbnails = document.querySelectorAll('.thumbnail-non-pdf-item.active');
+    thumbnails.forEach(thumb => {
+      thumb.classList.remove('active');
+    });
+    nonPdfThumbnails.forEach(thumb => {
+      thumb.classList.remove('active');
+    });
+    component.classList.add('active');
+  }
+
+  function handleClickSourceUrl(searchResultsItem, text, index, messageContainerId) {
+    if (window.eysources === 'modal') {
+      return openSourceLinkInModal(searchResultsItem.url, text, index);
+    }
+
+    if (window.eysources === 'sidebar') {
+      return openSourceLinkInSideBar(searchResultsItem.url, text, index, messageContainerId);
+    }
+
+    window.open(url, '_blank');
+  }
 
   function removeDuplicateUrls(arr) {
     var seenUrls = {};
@@ -359,25 +1385,69 @@ try {
     });
   }
 
-  function createClickableSourceURLs(arr, messageContainerId) {
-    var urls = removeDuplicateUrls(arr);
+  function prepareDataForBoxDrawing(res) {
+    var groupedArray = [];
+    var groupMap = {};
 
-    var container = createDivElement({ id: "source-links", className: "source-links" })
-    var header = createHeaderElement({ h: "h4", innerText: "Sources", className: "source-header" })
+    res.forEach(function (item) {
+      var key = item.pageImagesUrl;
+
+      if (!groupMap[key]) {
+        groupMap[key] = {
+          pageImagesUrl: key,
+          items: [],
+        };
+        groupedArray.push(groupMap[key]);
+      }
+
+      groupMap[key].items.push(item);
+    });
+
+    return groupedArray;
+  }
+
+  function createClickableSourceURLs(searchRes, messageContainerId) {
+    var searchResults;
+    if (window.eysources === "thumbnails") {
+      searchResults = prepareDataForBoxDrawing(searchRes);
+    } else {
+      searchResults = removeDuplicateUrls(searchRes); 
+    }
+    
+    var container = createDivElement({ id: 'source-links', className: 'source-links' });
+    var header = createHeaderElement({
+      id: 'sourceHeader',
+      h: 'h4',
+      innerText: 'Sources',
+      className: 'source-header',
+    });
     container.appendChild(header);
 
-    var sourceLinksContainer = createDivElement({ 
-      id: "source-links-container", className: "source-links-container"
-    })
-    
-    urls.forEach(function(item, index) {
-      var component = linkItemComponent(index + 1, item.url, item.fileName);
-      component.onclick = function() {
-        handleClickSourceUrl(item.url, item.text, index + 1, messageContainerId);
-      };
-
-      sourceLinksContainer.appendChild(component);
+    var sourceLinksContainer = createDivElement({
+      id: 'source-links-container',
+      className: 'source-links-container',
     });
+
+    if (window.eysources === 'thumbnails') {
+      searchResults.forEach(function (item) {
+        var component = thumbnailsItemComponent(item.pageImagesUrl);
+
+        component.onclick = function () {
+          openSourceLinkInThumbnailsSideBar(item);
+          toggleThumbnailsActive(component, item, messageContainerId);
+        };
+
+        sourceLinksContainer.appendChild(component);
+      });
+    } else {
+      searchResults.forEach(function (item, index) {
+        var component = linkItemComponent(index + 1, item, item.fileName);
+        component.onclick = function () {
+          handleClickSourceUrl(item, item.text, index + 1, messageContainerId);
+        };
+        sourceLinksContainer.appendChild(component);
+      });
+    }
 
     container.appendChild(sourceLinksContainer);
     return container;
@@ -1495,6 +2565,10 @@ window.menu = null;
                   window.eySocket.onopen = t.handleWSOpen;
                   window.eySocket.onmessage = t.handleWSMessage;
                   window.eySocket.onclose = t.handleWSClose;
+
+                  if (window.eysources === 'thumbnails') {
+                    initEmptyXraySourceBar();
+                  }
                 }, this.handleWSClose = function(n) {
                   var now = Date.now();
                   console.log('ws closed');
@@ -1858,7 +2932,8 @@ window.menu = null;
 
                     processPart();
                   });
-                }, this.handleWSMessage = function(n) {
+                  }, this.handleWSMessage = function (n) {
+                  removeBoxShadowForXrayTheme();
                   window.isChatting = false;
                   if (n && n.data) {
                     try {
@@ -2253,24 +3328,83 @@ window.menu = null;
                   var tid = turnUUIDInvert(message.session, true);
                  
                   if (aiMetadata.searchResults) {
-                    for (var i = 0; i < aiMetadata.searchResults.length; i++) {
+                    const aiMetadataSearchResults = [];
+  
+                    aiMetadata.searchResults.forEach(obj => {
+                      if (!obj.boundingBoxes) {
+                        aiMetadataSearchResults.push(obj);
+                      } else if (obj.pageImages.length === 1) {
+                        aiMetadataSearchResults.push(obj);
+                      } else {
+                        obj.pageImages.forEach(imageUrl => {
+                          const newObj = { ...obj, pageImages: [imageUrl] };
+                          aiMetadataSearchResults.push(newObj);
+                        });
+                      }
+                    });
+  
+                    for (var i = 0; i < aiMetadataSearchResults.length; i++) {
                       var searchResultsTempText = '';
                       var fileName = '';
-
-                      if (aiMetadata.searchResults[i].text) {
-                        searchResultsTempText = aiMetadata.searchResults[i].text;
+                      var pageImagesUrl = '';
+                      var boundingBoxes = [];
+                      var suggestedText = '';
+                      var documentId = '';
+                      var fileKeywords = '';
+                      var pageNumberFromUrl = null;
+  
+                      if (aiMetadataSearchResults[i].documentId) {
+                        documentId = aiMetadataSearchResults[i].documentId;
                       }
-
-                      if (aiMetadata.searchResults[i].fileName) {
-                        fileName = aiMetadata.searchResults[i].fileName;
+  
+                      if (aiMetadataSearchResults[i].text) {
+                        searchResultsTempText = aiMetadataSearchResults[i].text;
                       }
-
-                      if (aiMetadata.searchResults[i].sourceUrl) {
-                        urls.push({
-                          fileName: fileName,
-                          text: searchResultsTempText,
-                          url: aiMetadata.searchResults[i].sourceUrl,
+  
+                      if (aiMetadataSearchResults[i].suggestedText) {
+                        suggestedText = aiMetadataSearchResults[i].suggestedText;
+                      }
+  
+                      if (aiMetadataSearchResults[i].fileKeywords) {
+                        fileKeywords = aiMetadataSearchResults[i].fileKeywords;
+                      }
+  
+                      if (aiMetadataSearchResults[i].fileName) {
+                        fileName = aiMetadataSearchResults[i].fileName;
+                      }
+  
+                      if (aiMetadataSearchResults[i].pageImages) {
+                        pageImagesUrl = aiMetadataSearchResults[i].pageImages[0];
+  
+                        if (pageImagesUrl) {
+                          var parts = pageImagesUrl.split('/');
+                          var lastPart = parts[parts.length - 1];
+                          var pageNumberStr = lastPart.split('.')[0];
+                          pageNumberFromUrl = parseInt(pageNumberStr);
+                        }
+                      }
+  
+                      if (aiMetadataSearchResults[i].boundingBoxes) {
+                        boundingBoxes = aiMetadataSearchResults[i].boundingBoxes.filter(function (
+                          box,
+                        ) {
+                          return box.pageNumber === pageNumberFromUrl;
                         });
+                      }
+  
+                      if (aiMetadataSearchResults[i].sourceUrl) {
+                        if (aiMetadataSearchResults[i].sourceUrl) {
+                          urls.push({
+                            fileName: fileName,
+                            text: searchResultsTempText,
+                            url: aiMetadataSearchResults[i].sourceUrl,
+                            pageImagesUrl: pageImagesUrl,
+                            boundingBoxes: boundingBoxes,
+                            suggestedText: suggestedText,
+                            fileKeywords: fileKeywords,
+                            documentId: documentId,
+                          });
+                        }
                       }
                     }
                   }
@@ -2438,7 +3572,17 @@ window.menu = null;
                   }
                   t.removeFeedbackWidget();
                   t.scrollToBottom();
-              }, this.handleInput = function(n) {
+                  }, this.handleInput = function (n) {
+                  
+                  if (window.selectedFiles && window.selectedFiles.length > 0) {
+                    for (var i = 0; i < window.selectedFiles.length; i++) {
+                      var file = window.selectedFiles[i];
+                      if (file.status !== 'uploaded' && !file.uploadedURL) {
+                        return;
+                      }
+                    }
+                  }
+                  
                   if (window.eySocket.isStreaming || window.eySocket.renderingStream) {
                     t.stopStreaming(n);
                     if (!n) {
@@ -3441,6 +4585,16 @@ window.menu = null;
                     if (sess) {
                       sess = JSON.stringify(sess);
                     }
+                  
+                    var attachmentsArray = [];
+                    if (window.selectedFiles && window.selectedFiles.length > 0) {
+                      for (var i = 0; i < window.selectedFiles.length; i++) {
+                        var file = window.selectedFiles[i];
+                        if (file.status === 'uploaded' && file.uploadedURL) {
+                          attachmentsArray.push(file.uploadedURL);
+                        }
+                      }
+                    }
                     var ben = {
                         cref: window.eyref && window.eyref,
                         data: inputVal,
@@ -3457,7 +4611,10 @@ window.menu = null;
                         type: ty || 'text',
                         uid: window.user.userId,
                         username: window.username,
+                        attachments: attachmentsArray,
                     };
+                    window.selectedFiles = [];
+                    renderFiles();
                     if (typeof window.flowname !== 'undefined') {
                       ben.flowname = window.flowname;
                     }
